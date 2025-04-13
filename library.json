@@ -1,0 +1,25 @@
+{
+    "name": "jetlog",
+    "version": "1.0.0",
+    "description": "Fast, lock-less and type-safe logging for small embedded systems.",
+    "keywords": [ "logging", "thread-safe", "type-safe" ],
+    "homepage": "https://github.com/pdsink/jetlog",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/pdsink/jetlog.git"
+    },
+    "license": "MIT",
+    "dependencies": {
+      "Embedded Template Library": "*"
+    },
+    "headers": "jetlog/jetlog.hpp",
+    "export": {
+        "include": [
+            "examples/**",
+            "include/**",
+            "CHANGELOG.md",
+            "LICENSE",
+            "README.md"
+        ]
+    }
+  }
