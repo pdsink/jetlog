@@ -147,7 +147,7 @@ public:
             }
         }
 
-        // Must be type specifier
+        // Must be a type specifier
         switch(str[pos]) {
             case 'x': spec.base(16); break;
             case 'X': spec.base(16).upper_case(true); break;

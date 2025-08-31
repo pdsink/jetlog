@@ -108,11 +108,11 @@ TEST_F(StringTokenizerTest, RangeBasedFor) {
     EXPECT_EQ(actual, expected);
 }
 
-// Test incorrect placehoder
+// Test incorrect placeholder
 TEST_F(StringTokenizerTest, Incomplete_Placeholders) {
     verify_tokens("text { text", {
         //{"text { text", false}
-        // Text splitted to several tokens, due simplified scanner
+        // Text split into several tokens, due to a simplified scanner
         {"text ", false},
         {"{", false},
         {" text", false}

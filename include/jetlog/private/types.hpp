@@ -25,8 +25,8 @@ enum class DataType {
 };
 
 struct FormatSpec {
-    // In future, we can add spec parse to support width, precision, alignment,
-    // etc. For now just remember spec data and do nothing.
+    // In the future, we can add spec parsing to support width, precision,
+    // alignment, etc. For now, just store the spec data and do nothing.
     explicit FormatSpec(etl::string_view fmt = {}) : raw(fmt) {}
 
     etl::string_view raw;
@@ -112,7 +112,7 @@ public:
 
     template <typename TOUT>
     static void write(const T& value, TOUT& out) {
-        // Transform to 4-bytes int
+        // Transform to a 4-byte int
         uint32_t result{0};
         memcpy(&result, &value, sizeof(result));
 
@@ -137,7 +137,7 @@ public:
 
     template <typename TOUT>
     static void write(const T& value, TOUT& out) {
-        // Transform to 8-bytes int
+        // Transform to an 8-byte int
         uint64_t result{0};
         memcpy(&result, &value, sizeof(result));
 
@@ -164,8 +164,8 @@ public:
         ((U*)nullptr)->begin(),
         ((U*)nullptr)->end(),
         ((U*)nullptr)->length(),
-        ((U*)nullptr)->c_str(),  // Optional, let's use for more strict check
-        // Check strings elements are 1-byte chars
+        ((U*)nullptr)->c_str(),  // Optional, use for a stricter check
+        // Check string elements are 1-byte chars
         typename etl::enable_if<sizeof(typename U::value_type) == 1, int>::type(0),
         etl::true_type{}
     );
@@ -184,8 +184,8 @@ public:
     }
 };
 
-// Encoder for char*, const char*. Literal's char[N] are decayed in push() to
-// reduce specialization for literal arguments
+// Encoder for char*, const char*. Literals' char[N] are decayed in push() to
+// reduce specializations for literal arguments
 template <typename T>
 class EncoderCString : public EncoderHelpers {
 public:
@@ -284,7 +284,7 @@ public:
     }
 
     void format(etl::istring& out, etl::string_view fmt = {}) {
-        // 0bXXX... for uint64_t - max possible lendth 64+2
+        // 0bXXX... for uint64_t — max possible length 64+2
         etl::format_spec spec;
 
         FormatParser::parse_format(fmt, 0, spec);
@@ -329,7 +329,7 @@ public:
 
     void format(etl::istring& out, etl::string_view fmt = {}) {
         (void)fmt;
-        // force std::to_string() like behaviour - 6 digits fractional part.
+        // Force std::to_string()-like behavior — 6-digit fractional part.
         etl::to_string(pickValue(), out, etl::format_spec().precision(6), true);
     }
 
@@ -361,7 +361,7 @@ public:
 
     void format(etl::istring& out, etl::string_view fmt = {}) {
         (void)fmt;
-        // force std::to_string() like behaviour - 6 digits fractional part.
+        // Force std::to_string()-like behavior — 6-digit fractional part.
         etl::to_string(pickValue(), out, etl::format_spec().precision(6), true);
     }
 

@@ -11,8 +11,8 @@ template<bool B, bool... Bs>
 struct bool_or<B, Bs...> : etl::conditional<B, etl::true_type, bool_or<Bs...>>::type {};
 
 
-// Helper to call Encoder ONLY if matched (because only in this case write()
-// will accept desired type)
+// Helper to call an encoder only if it matches (because only in this case
+// write() will accept the desired type)
 template<template<typename> class E, typename T, typename TOUT>
 typename etl::enable_if<E<T>::matchType>::type
 call_encoder(const T& v, TOUT& out) {
@@ -22,7 +22,7 @@ call_encoder(const T& v, TOUT& out) {
 template<template<typename> class E, typename T, typename TOUT>
 typename etl::enable_if<!E<T>::matchType>::type
 call_encoder(const T&, TOUT&) {
-    // do nothing if not matched
+    // Do nothing if not matched
 }
 
 
@@ -64,7 +64,7 @@ struct DecoderList {
 
 
 //
-// Several pre-defined list variants for quick-choose
+// Several predefined list variants for quick selection
 //
 
 using ParamEncoders_32_No_Float = EncoderList<

@@ -43,8 +43,8 @@ public:
             writeBuffer((allocation_index + sizeof(RecordHeader)) % BufferSize, data, size);
         }
 
-        // Independent on write success, try to update head_idx if no more
-        // writers are locking buffer.
+        // Regardless of write success, try to update head_idx if no writers
+        // are locking the buffer.
 
         auto current_head = head_idx.load(etl::memory_order_relaxed);
         auto current_upcoming = upcoming_idx.load(etl::memory_order_relaxed);
@@ -52,10 +52,10 @@ public:
 
         if (current_writers_count == 1) {
             if (current_head != current_upcoming) {
-                // If update fails => another writer already did update
+                // If update fails => another writer already performed the update
                 //
                 // In theory, current_upcoming can become outdated here, but
-                // that will be fixed on next write.
+                // that will be fixed on the next write.
                 head_idx.compare_exchange_strong(current_head, current_upcoming,
                     etl::memory_order_release, etl::memory_order_relaxed);
             }
@@ -100,9 +100,9 @@ public:
     }
 
     //
-    // Note, this is uncertain feature, to unlock buffer at global fuckup, like
-    // watchdog reset. No ideas about real system demands. May be should be done
-    // in a different way.
+    // Note: this is an uncertain feature to unlock the buffer after a global
+    // failure, like a watchdog reset. Real system demands are unclear; it may
+    // need to be done in a different way.
     //
     auto reset(bool unlock_only = false) -> void override {
         if (unlock_only) {
@@ -146,7 +146,7 @@ private:
                 return ALLOCATION_FAILED;
             }
 
-            // If current space less that needed - cut tail
+            // If current space is less than needed — cut the tail
             // + 1 byte reserved, to distinguish empty from full
             if (required_size + 1 > space_available) {
                 RecordHeader header{};
@@ -162,7 +162,7 @@ private:
                 continue;
             }
 
-            // At this place we know that we have enough space.
+            // At this point we know that we have enough space.
 
             size_t new_upcoming{(upcoming + required_size) % BufferSize};
 

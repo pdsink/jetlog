@@ -8,10 +8,10 @@ Logger logger(ringBuffer);
 jetlog::Reader<> logReader(ringBuffer);
 
 //
-// This print-er is platform-specific. In this demo we use Serial to keep things
+// This printer is platform-specific. In this demo we use Serial to keep things
 // simple.
 //
-// For Arduino, with poor async support, threads is the most obvious way
+// For Arduino, with limited async support, threads are the most obvious way
 // to decouple output printing. Use the lowest possible priority.
 //
 
@@ -23,12 +23,12 @@ void logger_start() {
 
         Serial.begin(115200);
 
-        // Wait until serial connected, before printing. In other case
-        // the log head from firmware start can be lost.
+        // Wait until the serial port is connected before printing. Otherwise
+        // the log output from firmware start can be lost.
         while (!Serial) { vTaskDelay(pdMS_TO_TICKS(10)); }
 
         while (true) {
-            // Read and print log records, until there is no more data.
+            // Read and print log records until there is no more data.
             while (logReader.pull(outputBuffer)) {
                 Serial.println(outputBuffer.c_str());
                 outputBuffer.clear();

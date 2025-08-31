@@ -6,9 +6,10 @@ void setup() {
     // Log reader should start in low priority thread, to print in background
     // when app is not busy.
     //
-    // Using loop() for arduino is not recommended, because printing to
-    // ardiono's Serial can be blocking. This is NOT jetlog restriction. You can
-    // create async log print-er, if platform allows. See comments in `.cpp` file.
+    // Using loop() for Arduino is not recommended, because printing to
+    // Arduino's Serial can be blocking. This is NOT a jetlog restriction. You
+    // can create an async log printer, if the platform allows. See comments in
+    // `.cpp` file.
     //
     logger_start();
     LOG_INFO("Logger started");

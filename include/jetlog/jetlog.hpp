@@ -49,7 +49,7 @@ public:
 
     template<typename... Args>
     auto push(const char* tag, uint8_t level, const char* message, const Args&... msgArgs) -> bool {
-        // record should be vector, but we use string to control overflow
+        // The record should be a vector, but we use a string to control overflow
         etl::string<MaxRecordSize> record{};
         record.clear();
 
@@ -64,7 +64,7 @@ public:
         bool size_ok = !record.is_truncated();
 
         if (!size_ok) {
-            // If data too big, write truncated stub
+            // If the data is too big, write a truncated stub
             record.clear();
             Encoders::write(getTime(), record);
             Encoders::write(tag, record);

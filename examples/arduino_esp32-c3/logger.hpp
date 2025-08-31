@@ -10,7 +10,7 @@ using Logger = jetlog::Writer<>;
 
 extern Logger logger;
 
-// We do not use tags in this example, so we pass empty string.
+// We do not use tags in this example, so we pass an empty string.
 #define LOG_ERROR(...) logger.push("", jetlog::level::error, __VA_ARGS__)
 #define LOG_INFO(...) logger.push("", jetlog::level::info, __VA_ARGS__)
 #define LOG_DEBUG(...) logger.push("", jetlog::level::debug, __VA_ARGS__)

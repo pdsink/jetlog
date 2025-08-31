@@ -23,9 +23,9 @@
 
 For usage examples, see the [examples](./examples) folder.
 
-Note, this package uses [ETL](https://www.etlcpp.com/), but does not pin the
-concrete version, to avoid conflict with your application. Set a concrete
-dependency version in your app, to have stable configuration.
+Note that this package uses [ETL](https://www.etlcpp.com/) but does not pin a
+specific version, to avoid conflicts with your application. Set a specific
+dependency version in your application to keep the configuration stable.
 
 
 ## Supported Formats
