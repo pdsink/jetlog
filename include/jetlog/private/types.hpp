@@ -203,9 +203,8 @@ public:
 // Interface for all decoder classes
 class IDecoder {
 public:
-    static auto matchTypeTag(uint8_t) -> bool {
-        assert("This method must be overriden");
-    }
+    // Should be implemented in derived classes
+    // static auto matchTypeTag(uint8_t) -> bool { ... }
 
     explicit IDecoder(const etl::ivector<uint8_t>& in, uint32_t recordOffset)
         : input{in}
@@ -213,10 +212,8 @@ public:
         , dataSize{readHeader(in, recordOffset).size}
     {}
 
-    void format(etl::istring& out, etl::string_view fmt = {}) {
-        (void)out; (void)fmt;
-        assert("This method must be overriden");
-    }
+    // Should be implemented in derived classes
+    // void format(etl::istring& out, etl::string_view fmt = {}) { ... }
 
     static auto isAvailableAt(const etl::ivector<uint8_t>& in, uint32_t recordOffset) -> bool {
         return (recordOffset + DataHeaderSize <= in.size()) &&
