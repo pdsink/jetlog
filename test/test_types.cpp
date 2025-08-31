@@ -1,10 +1,11 @@
 #include <gtest/gtest.h>
 
+#include <etl/to_arithmetic.h>
+#include <string>
+
 #include "jetlog/private/typelists.hpp"
 #include "jetlog/private/types.hpp"
 #include "jetlog/jetlog.hpp"
-
-#include <etl/to_arithmetic.h>
 
 using namespace jetlog;
 using Encoders = jetlog::ParamEncoders_64_And_Double;

@@ -1,4 +1,8 @@
 #include <gtest/gtest.h>
+
+#include <string>
+#include <vector>
+
 #include "jetlog/private/string_tokenizer.hpp"
 
 using jetlog::StringTokenizer;

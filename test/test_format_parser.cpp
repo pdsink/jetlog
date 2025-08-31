@@ -1,4 +1,8 @@
 #include <gtest/gtest.h>
+
+#include <cstdint>
+#include <string>
+
 #include "jetlog/jetlog.hpp"
 
 class HeadlessReader : public jetlog::Reader<> {
