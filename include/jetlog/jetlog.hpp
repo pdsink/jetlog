@@ -1,12 +1,13 @@
 #pragma once
 
-#include "private/ring_buffer.hpp"
-#include "private/string_tokenizer.hpp"
-#include "private/typelists.hpp"
-
 #include <etl/limits.h>
 #include <etl/type_traits.h>
 #include <etl/utility.h>
+#include <stdint.h>
+
+#include "private/ring_buffer.hpp"
+#include "private/string_tokenizer.hpp"
+#include "private/typelists.hpp"
 
 namespace jetlog {
 
@@ -149,8 +150,8 @@ public:
         output.append(": ");
     }
 
-    virtual auto level2str(uint8_t level) -> const char* {
-        switch (level) {
+    virtual auto level2str(uint8_t lvl) -> const char* {
+        switch (lvl) {
             case level::error: return "E";
             case level::warn: return "W";
             case level::info: return "I";
