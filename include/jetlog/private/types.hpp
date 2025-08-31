@@ -66,7 +66,8 @@ public:
 
     template <typename TOUT>
     static void write(const T& value, TOUT& out) {
-        T val = value;
+        using U = typename etl::make_unsigned<BaseType>::type;
+        U val = static_cast<U>(value);
 
         writeHeader(static_cast<uint8_t>(TypeId), sizeof(BaseType), out);
 
@@ -229,11 +230,12 @@ public:
         const uint32_t dataOffset = recordOffset + DataHeaderSize;
         const uint32_t dataSize = readHeader(in, recordOffset).size;
 
-        T result = 0;
+        using U = typename etl::make_unsigned<T>::type;
+        U uresult = 0;
         for (size_t i = 0; i < sizeof(T) && i < dataSize; ++i) {
-            result |= static_cast<T>(in[dataOffset + i]) << (8 * i);
+            uresult |= static_cast<U>(in[dataOffset + i]) << (8u * i);
         }
-        return result;
+        return static_cast<T>(uresult);
     }
 
     static auto getAsStringView(const etl::ivector<uint8_t>& in, uint32_t recordOffset) -> etl::string_view {
@@ -290,11 +292,12 @@ public:
 
 protected:
     auto pickValue() -> T {
-        T val{0};
+        using U = typename etl::make_unsigned<T>::type;
+        U uresult{0};
         for (size_t i{0}; i < dataSize; i++) {
-            val |= static_cast<T>(input[dataOffset + i]) << (i * 8);
+            uresult |= static_cast<U>(input[dataOffset + i]) << (i * 8);
         }
-        return val;
+        return static_cast<T>(uresult);
     }
 };
 
