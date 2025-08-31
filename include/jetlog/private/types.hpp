@@ -5,6 +5,7 @@
 #include <etl/to_string.h>
 #include <etl/type_traits.h>
 #include <etl/vector.h>
+#include <etl/endianness.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -116,9 +117,9 @@ public:
         memcpy(&result, &value, sizeof(result));
 
         // Always store as little-endian (swap bytes if needed)
-        #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+        if (etl::endian::native == etl::endian::big) {
             result = byteswap(result);
-        #endif
+        }
 
         writeHeader(static_cast<uint8_t>(DataType::Flt), sizeof(result), out);
 
@@ -141,9 +142,9 @@ public:
         memcpy(&result, &value, sizeof(result));
 
         // Always store as little-endian (swap bytes if needed)
-        #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+        if (etl::endian::native == etl::endian::big) {
             result = byteswap(result);
-        #endif
+        }
 
         writeHeader(static_cast<uint8_t>(DataType::Dbl), sizeof(result), out);
 
@@ -339,10 +340,10 @@ protected:
             val |= static_cast<uint32_t>(input[dataOffset + i]) << (i * 8);
         }
 
-        // Convert to big-endian is needed
-        #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+        // Convert to native big-endian if needed
+        if (etl::endian::native == etl::endian::big) {
             val = byteswap(val);
-        #endif
+        }
 
         float result;
         memcpy(&result, &val, sizeof(result));
@@ -371,10 +372,10 @@ protected:
             val |= static_cast<uint64_t>(input[dataOffset + i]) << (i * 8);
         }
 
-        // Convert to big-endian is needed
-        #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+        // Convert to native big-endian if needed
+        if (etl::endian::native == etl::endian::big) {
             val = byteswap(val);
-        #endif
+        }
 
         double result{0};
         memcpy(&result, &val, sizeof(result));
