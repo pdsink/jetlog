@@ -24,7 +24,9 @@ template <typename Char, size_t N>
 constexpr auto decayLiteralArg(Char (&s)[N]) noexcept -> typename
 etl::enable_if<etl::is_same<typename etl::remove_cv<Char>::type, char>::value, const char*>::type
 {
-    return static_cast<const char*>(s);
+    // Array-to-pointer decay happens due to the function's return type
+    // being `const char*`. Returning `s` is portable and correct.
+    return s;
 }
 
 template <typename T>
