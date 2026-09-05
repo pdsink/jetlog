@@ -16,21 +16,19 @@
 - **Configurable types support**: You can select only required types to minimize
   overhead.
 
-> **Requires**: `C++14`
+> **Requires**: `C++17`
 
 
 ## Usage
 
-For usage examples, see the [examples](./examples) folder.
+See the [examples](./examples) folder.
 
-Note that this package uses [ETL](https://www.etlcpp.com/) but does not pin a
-specific version, to avoid conflicts with your application. Set a specific
-dependency version in your application to keep the configuration stable.
+This package depends on [ETL](https://www.etlcpp.com/) but does not pin a
+version, to avoid conflicts with your application. Pin it in your application
+instead.
 
 
 ## Supported Formats
-
-Here are the supported formatting options:
 
 ```cpp
 // Simple placeholder without format
@@ -40,7 +38,7 @@ Here are the supported formatting options:
 {:x}  // ff
 {:X}  // FF
 
-// Hexadecimal with leading 0X
+// Hexadecimal with base prefix
 {:#x} // 0xff
 {:#X} // 0XFF
 
@@ -58,11 +56,9 @@ Here are the supported formatting options:
 
 ## Supported Types
 
-The logger supports both numeric and string-like parameters. By default, numeric types include 32-bit integers and floating-point numbers. For custom configurations, such as adding 64-bit integers or removing floating-point types, refer to the [typelists](./include/jetlog/private/typelists.hpp) file. This allows you to optimize the logger for your specific needs and minimize overhead.
+By default: integers up to 32 bits, `bool` and string-like parameters. To add
+64-bit integers or floating point, list them in the `Codecs<>` option of your
+config, see [codecs](./include/jetlog/private/codecs.hpp) for what is available.
 
-
-## Known Edge Cases
-
-Each writer first creates a shadow record and then publishes it. For parallel writes, the last writer publishes all records. This can cause a side effect when a high-pressure writer interrupts another: if the buffer overflows before publishing, the upcoming records will be lost. This behavior is an intentional tradeoff to balance features with the constraints of embedded systems.
-
-Such situations are uncommon in small embedded systems. However, if you require high-pressure writes, use a separate buffer for each writer. When a single writer is used per buffer, this side effect will not occur.
+Tag and format are stored by pointer and must outlive their records.
+String arguments are copied unless wrapped in `jetlog::static_str`.

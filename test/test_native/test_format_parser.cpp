@@ -5,26 +5,28 @@
 
 #include "jetlog/jetlog.hpp"
 
-class HeadlessReader : public jetlog::Reader<> {
-public:
-    HeadlessReader(jetlog::IRingBuffer& buf) : jetlog::Reader<>(buf) {}
+using Config = jetlog::Config<>;
 
-    void writeLogHeader(etl::istring& output, uint32_t timestamp, const etl::string_view& tag, uint8_t level) override {
-        (void)output; (void)timestamp; (void)tag; (void)level;
-    }
+class HeadlessReader : public jetlog::Reader<Config> {
+public:
+    explicit HeadlessReader(jetlog::IRingBuffer& buf) : jetlog::Reader<Config>(buf) {}
+
+    void writeLogHeader(etl::istring&, uint32_t, const etl::string_view&, uint8_t) override {}
 };
 
 template <typename... Args>
 std::string toString(const char* fmt, Args&&... args) {
     jetlog::RingBuffer<10000> ringBuffer;
-    jetlog::Writer<> logWriter(ringBuffer);
+    jetlog::Writer<Config> logWriter(ringBuffer);
     HeadlessReader logReader(ringBuffer);
     etl::string<100> output;
 
-    logWriter.push("", jetlog::level::info, fmt, args...);
+    // fmt is a pointer, so mark its lifetime explicitly; pull() reads it before
+    // this helper returns.
+    logWriter.push("", jetlog::level::info, jetlog::static_str(fmt), args...);
     logReader.pull(output);
 
-    return output.c_str(); // Skip the log level
+    return output.c_str();
 }
 
 TEST(FormatParserTest, PlaceholderLength) {
@@ -54,12 +56,12 @@ TEST(FormatParserTest, PlaceholderLength) {
     EXPECT_EQ(FormatParser::get_placeholder_length("{:", 0), 0u);
     EXPECT_EQ(FormatParser::get_placeholder_length("{:z}", 0), 0u);
 
-    // Complex pattern with multiple placeholders and text in between
+    // Locate placeholders at nonzero offsets in mixed text.
     etl::string<100> pattern = "{} {:x} abc {:X} {:015X}";
     EXPECT_EQ(FormatParser::get_placeholder_length(pattern, 0), 2u);   // {}
     EXPECT_EQ(FormatParser::get_placeholder_length(pattern, 3), 4u);   // {:x}
     EXPECT_EQ(FormatParser::get_placeholder_length(pattern, 12), 4u);  // {:X}
-    EXPECT_EQ(FormatParser::get_placeholder_length(pattern, 17), 7u);  // {:X}
+    EXPECT_EQ(FormatParser::get_placeholder_length(pattern, 17), 7u);  // {:015X}
 }
 
 TEST(FormatParserTest, DecimalFormat) {
@@ -106,7 +108,7 @@ TEST(FormatParserTest, EdgeCases) {
 }
 
 TEST(FormatParserTest, InvalidFormats) {
-    // Basic invalid cases that should default to decimal
+    // Invalid placeholders remain literal text.
     EXPECT_EQ(toString("{:z}", 42), "{:z}");  // Invalid type
     EXPECT_EQ(toString("{:", 42), "{:");    // Incomplete format
     EXPECT_EQ(toString("{:0}", 42), "{:0}");  // Missing type

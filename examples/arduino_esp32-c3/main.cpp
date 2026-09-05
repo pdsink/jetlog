@@ -3,19 +3,15 @@
 
 void setup() {
     //
-    // Log reader should start in low priority thread, to print in background
-    // when app is not busy.
-    //
-    // Using loop() for Arduino is not recommended, because printing to
-    // Arduino's Serial can be blocking. This is NOT a jetlog restriction. You
-    // can create an async log printer, if the platform allows. See comments in
-    // `.cpp` file.
+    // Arduino's Serial can block, so the reader prints in a low-priority task
+    // instead of delaying loop(). With a nonblocking output driver, logs can
+    // also be drained from loop().
     //
     logger_start();
     LOG_INFO("Logger started");
 }
 void loop() {
-    // This is just an example. You can call logger from anywhere in your code.
+    // The logger can be called from anywhere.
 
     int8_t int8_val = -8;
     uint8_t uint8_val = 8;
@@ -24,10 +20,11 @@ void loop() {
     int32_t int32_val = -32;
     uint32_t uint32_val = 32;
     const char* str_val = "test";
-    char* mutable_str_val = const_cast<char*>("mutable");
+    char mutable_str_val[] = "mutable";
     std::string std_str = "std_str";
     etl::string<100> etl_str = "etl_str";
 
+    // The format is stored by pointer: use a literal or a static const array.
     LOG_INFO("Test values: {}, {:04x}, {}, {}, {}, {}, {}, {}, {}, {}, {}",
         int8_val, uint8_val, int16_val, uint16_val,
         int32_val, uint32_val, str_val, mutable_str_val,

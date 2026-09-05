@@ -1,216 +1,289 @@
 #pragma once
 
-#include <etl/algorithm.h>
-#include <etl/array.h>
 #include <etl/atomic.h>
-#include <etl/limits.h>
-#include <etl/vector.h>
+#include <etl/binary.h>
+#include <etl/memory.h>
 
 #include <stddef.h>
 #include <stdint.h>
 
 namespace jetlog {
 
+//
+// Chunk pool + ring of records.
+//
+// A record is a chain of chunks. The buffer allocates chunks, links them,
+// publishes finished chains and hands them out one at a time.
+//
+// Writers are many (threads, tasks, interrupts) and never wait. The reader is
+// single and low priority. On overflow the oldest records are evicted and
+// counted.
+//
+
+using ChunkId = uint16_t;
+
+constexpr ChunkId NoChunk = 0xFFFF;
+
+
 class IRingBuffer {
 public:
-    virtual auto writeRecord(const etl::ivector<uint8_t>& data) -> bool = 0;
-    virtual auto writeRecord(const uint8_t* data, size_t size) -> bool = 0;
-    virtual auto readRecord(etl::ivector<uint8_t>& data) -> bool = 0;
-    virtual auto reset(bool unlock_only = false) -> void = 0;
+    // Starts a chain. NoChunk if no free chunk or evictable record is available.
+    virtual auto create_chunk() -> ChunkId = 0;
+
+    // Appends a chunk to the end of the chain. Same failure condition.
+    virtual auto add_chunk(ChunkId id) -> ChunkId = 0;
+
+    // Walks the chain. NoChunk means the chain ends here.
+    virtual auto next_chunk(ChunkId id) const -> ChunkId = 0;
+
+    // The chunk's bytes, without the link the buffer keeps for itself.
+    virtual auto chunk_data(ChunkId id) -> uint8_t* = 0;
+    virtual auto chunk_data_size() const -> size_t = 0;
+
+    // Publishes the chain. Until then it is invisible to everyone else.
+    virtual auto ring_push(ChunkId id) -> void = 0;
+
+    // Takes the oldest record out of the ring - nobody else can see or evict
+    // it after that. NoChunk if there is nothing to take.
+    virtual auto ring_pop() -> ChunkId = 0;
+
+    virtual auto release_chunks(ChunkId id) -> void = 0;
+
+    // Counts a rejected record, such as a failed write or malformed header.
+    // Evicted records are counted automatically by the buffer.
+    virtual auto report_lost() -> void = 0;
+
+    // Total losses since start: evicted and explicitly reported records.
+    virtual auto lost_count() const -> uint32_t = 0;
+
+protected:
+    // Protected to prevent deletion through this non-owning interface.
+    ~IRingBuffer() = default;
 };
 
-template <size_t BufferSize>
-class RingBuffer : public IRingBuffer {
+
+//
+// BufferSize is the size of the chunk pool, bookkeeping adds about 10% on top.
+//
+// ChunkSize is the granularity of allocation: a trade-off between the tail
+// wasted by short records and the number of records the same memory holds.
+//
+template <size_t BufferSize, size_t ChunkSize = 32>
+class RingBuffer final : public IRingBuffer {
 public:
-    struct RecordHeader {
-        uint16_t size;
-    };
-
-    auto writeRecord(const etl::ivector<uint8_t>& data) -> bool override {
-        return writeRecord(data.data(), data.size());
-    }
-
-    auto writeRecord(const uint8_t* data, size_t size) -> bool override {
-        size_t record_size{sizeof(RecordHeader) + size};
-
-        writers_count.fetch_add(1, etl::memory_order_relaxed);
-
-        auto allocation_index = allocateSpace(record_size);
-        bool allocation_success = (allocation_index != ALLOCATION_FAILED);
-
-        if (allocation_success) {
-            setRecordHeader(allocation_index, { static_cast<uint16_t>(size) });
-            writeBuffer((allocation_index + sizeof(RecordHeader)) % BufferSize, data, size);
+    RingBuffer() {
+        // All chunks are free. Bits above CHUNKS_COUNT stay zero forever, so
+        // they are never handed out.
+        for (size_t word = 0; word < BITMAP_WORDS; word++) {
+            size_t rest = CHUNKS_COUNT - word * BITS_PER_WORD;
+            free_bits[word].store(
+                rest >= BITS_PER_WORD
+                    ? ~uint32_t{0}
+                    : static_cast<uint32_t>((uint32_t{1} << rest) - 1),
+                etl::memory_order_relaxed);
         }
 
-        // Regardless of write success, try to update head_idx if no writers
-        // are locking the buffer.
-
-        auto current_head = head_idx.load(etl::memory_order_relaxed);
-        auto current_upcoming = upcoming_idx.load(etl::memory_order_relaxed);
-        auto current_writers_count = writers_count.fetch_sub(1, etl::memory_order_relaxed);
-
-        if (current_writers_count == 1) {
-            if (current_head != current_upcoming) {
-                // If update fails => another writer already performed the update
-                //
-                // In theory, current_upcoming can become outdated here, but
-                // that will be fixed on the next write.
-                head_idx.compare_exchange_strong(current_head, current_upcoming,
-                    etl::memory_order_release, etl::memory_order_relaxed);
-            }
+        // Generation of position 0 is 0, so a cell tagged with 1 reads as
+        // "nothing published here yet".
+        for (size_t i = 0; i < RING_SIZE; i++) {
+            ring[i].store(CELL_GENERATION, etl::memory_order_relaxed);
         }
-
-        return allocation_success;
     }
 
-    auto readRecord(etl::ivector<uint8_t>& data) -> bool override {
+    auto create_chunk() -> ChunkId override {
+        return alloc();
+    }
+
+    auto add_chunk(ChunkId id) -> ChunkId override {
+        auto fresh = alloc();
+        if (fresh == NoChunk) { return NoChunk; }
+
+        ChunkId last = id;
+        while (chunks[last].next != NoChunk) { last = chunks[last].next; }
+        chunks[last].next = fresh;
+
+        return fresh;
+    }
+
+    auto next_chunk(ChunkId id) const -> ChunkId override {
+        return chunks[id].next;
+    }
+
+    auto chunk_data(ChunkId id) -> uint8_t* override {
+        return chunks[id].data;
+    }
+
+    auto chunk_data_size() const -> size_t override {
+        return CHUNK_DATA_SIZE;
+    }
+
+    auto ring_push(ChunkId id) -> void override {
+        auto pos = head.fetch_add(1, etl::memory_order_relaxed);
+
+        // Release, to hand the record's content over to whoever picks it.
+        ring[cell_of(pos)].store(
+            static_cast<uint16_t>(generation_of(pos) | id),
+            etl::memory_order_release);
+    }
+
+    auto ring_pop() -> ChunkId override {
         while (true) {
-            size_t tail{tail_idx.load(etl::memory_order_relaxed)};
-            // Here we use ACQUIRE to sync with writer thread (it updates
-            // head_idx on publish).
-            size_t head{head_idx.load(etl::memory_order_acquire)};
+            auto pos = tail.load(etl::memory_order_relaxed);
+            auto cell = ring[cell_of(pos)].load(etl::memory_order_acquire);
 
-            if (tail == head) {
-                data.clear();
-                return false;
-            }
+            // The cell is reused every RING_SIZE positions, and a stale
+            // value carries the previous lap's generation bit. So a mismatch
+            // means "not published (yet)" and no cleanup is needed after a
+            // successful pick.
+            if ((cell & CELL_GENERATION) != generation_of(pos)) { return NoChunk; }
 
-            RecordHeader header{};
-            getRecordHeader(tail, header);
-            size_t size{header.size};
-
-            if (tail_idx.load(etl::memory_order_relaxed) != tail) {
-                // If tail changed - header is invalid, need to retry.
-                continue;
-            }
-
-            data.resize(size);
-            size_t next_tail{(tail + sizeof(RecordHeader) + size) % BufferSize};
-
-            readBuffer((tail + sizeof(RecordHeader)) % BufferSize, data.data(), size);
-
-            if (tail_idx.compare_exchange_strong(tail, next_tail,
-                // Here we use relaxed write, because reader has NO other write
-                // operations to push. And atomics themselves are always ordered.
+            // The CAS decides the owner. It also validates the cell we read:
+            // the cell can only be reused after tail moves past it.
+            if (tail.compare_exchange_strong(pos, pos + 1,
                 etl::memory_order_relaxed, etl::memory_order_relaxed)) {
-                return true;
+                return static_cast<ChunkId>(cell & ~CELL_GENERATION);
             }
         }
     }
 
-    //
-    // Note: this is an uncertain feature to unlock the buffer after a global
-    // failure, like a watchdog reset. Real system demands are unclear; it may
-    // need to be done in a different way.
-    //
-    auto reset(bool unlock_only = false) -> void override {
-        if (unlock_only) {
-            writers_count = 0;
-            upcoming_idx = head_idx.load();
-            return;
-        }
+    auto release_chunks(ChunkId id) -> void override {
+        ChunkId cur = id;
 
-        writers_count = 0;
-        tail_idx = 0;
-        head_idx = 0;
-        upcoming_idx = 0;
+        while (cur != NoChunk) {
+            // Read the link before giving the chunk away: once freed, it may
+            // already belong to somebody else.
+            ChunkId next = chunks[cur].next;
+
+            free_bits[cur / BITS_PER_WORD].fetch_or(
+                uint32_t{1} << (cur % BITS_PER_WORD), etl::memory_order_release);
+
+            cur = next;
+        }
+    }
+
+    auto report_lost() -> void override {
+        lost.fetch_add(1, etl::memory_order_relaxed);
+    }
+
+    auto lost_count() const -> uint32_t override {
+        return lost.load(etl::memory_order_relaxed);
     }
 
 private:
-    static constexpr size_t ALLOCATION_FAILED = static_cast<size_t>(-1);
+    static constexpr size_t BITS_PER_WORD = 32;
 
-    // Allocate space for a record, returns the index to write at, or failure
-    size_t allocateSpace(size_t required_size) {
-        if (required_size > etl::numeric_limits<uint16_t>::max()) {
-            return ALLOCATION_FAILED;
+    // Top bit of a ring cell marks the lap, the rest is the chunk index.
+    static constexpr uint16_t CELL_GENERATION = 0x8000;
+
+    // The link to the next chunk lives in the chunk, data is what is left.
+    static constexpr size_t CHUNK_DATA_SIZE = ChunkSize - sizeof(ChunkId);
+
+    static constexpr size_t CHUNKS_COUNT = BufferSize / ChunkSize;
+    static constexpr size_t BITMAP_WORDS = (CHUNKS_COUNT + BITS_PER_WORD - 1) / BITS_PER_WORD;
+
+    static constexpr auto round_up_pow2(size_t n) -> size_t {
+        size_t p = 1;
+        while (p < n) { p <<= 1; }
+        return p;
+    }
+
+    static constexpr auto log2_of(size_t n) -> size_t {
+        size_t bits = 0;
+        while ((size_t{1} << bits) != n) { bits++; }
+        return bits;
+    }
+
+    // The ring never holds more records than there are chunks, because every
+    // record in it owns at least one chunk. Rounded up to a power of two, so
+    // that the position counter stays consistent across its own 32 bit wrap.
+    static constexpr size_t RING_SIZE = round_up_pow2(CHUNKS_COUNT);
+    static constexpr size_t RING_MASK = RING_SIZE - 1;
+    static constexpr size_t RING_BITS = log2_of(RING_SIZE);
+
+    // A uint64_t or double is the largest indivisible value: 8 payload bytes
+    // plus its 1 byte type tag. Every chunk also carries a 2 byte link. Use 16
+    // bytes as the minimum to leave some headroom.
+    static_assert(ChunkSize >= 16, "Chunk size must be at least 16 bytes");
+    static_assert(ChunkSize % sizeof(ChunkId) == 0, "Chunk size must be even, or chunks get padded");
+    static_assert(CHUNKS_COUNT >= 2, "Buffer is too small to hold anything");
+    static_assert(CHUNKS_COUNT <= CELL_GENERATION, "Buffer is too big, chunk index must fit 15 bits");
+    static_assert((RING_SIZE & RING_MASK) == 0, "Ring size must be a power of two");
+    static_assert(RING_SIZE >= CHUNKS_COUNT, "Ring must hold every chunk");
+
+    struct Chunk {
+        ChunkId next;
+        uint8_t data[CHUNK_DATA_SIZE];
+    };
+
+    static_assert(sizeof(Chunk) == ChunkSize, "Chunk must not be padded");
+
+    static auto cell_of(uint32_t pos) -> size_t { return pos & RING_MASK; }
+    static auto generation_of(uint32_t pos) -> uint16_t {
+        return ((pos >> RING_BITS) & 1U) ? CELL_GENERATION : uint16_t{0};
+    }
+
+    // Hands out a chunk linked to nothing. Linking it into a chain is the
+    // caller's business.
+    auto alloc() -> ChunkId {
+        auto id = take_free_chunk();
+
+        // Reclaim space by evicting the oldest complete records until a chunk
+        // can be claimed or no victim is available.
+        while (id == NoChunk) {
+            auto victim = ring_pop();
+
+            // No victim is available. Chunks held by active writers or the
+            // reader cannot be reclaimed here.
+            if (victim == NoChunk) { return NoChunk; }
+
+            release_chunks(victim);
+            lost.fetch_add(1, etl::memory_order_relaxed);
+
+            id = take_free_chunk();
         }
 
-        while (true) {
-            size_t tail{tail_idx.load(etl::memory_order_relaxed)};
-            size_t upcoming{upcoming_idx.load(etl::memory_order_relaxed)};
-            // Here we use ACQUIRE to sync data for getRecordHeader
-            size_t head{head_idx.load(etl::memory_order_acquire)};
+        // The chain is private to its writer until published, so plain writes
+        // are enough here - the release on ring_push() covers them.
+        chunks[id].next = NoChunk;
 
-            size_t space_available = upcoming >= tail
-                ? BufferSize - upcoming + tail
-                : tail - upcoming;
+        // Unwritten bytes must read as padding; zero them once here instead
+        // of filling each unused tail when the writer moves to another chunk.
+        etl::mem_set(chunks[id].data, CHUNK_DATA_SIZE, uint8_t{0});
 
-            size_t max_available = upcoming >= head
-                ? BufferSize - upcoming + head
-                : head - upcoming;
+        return id;
+    }
 
-            // Check if we have enough space (after tail cleanup)
-            // + 1 byte reserved, to distinguish empty from full
-            if (required_size + 1 > max_available) {
-                return ALLOCATION_FAILED;
+    // Grabs any free chunk. No CAS loop: clearing a bit that is already clear
+    // is harmless, and the fetched word tells whether we won the bit or not.
+    auto take_free_chunk() -> ChunkId {
+        for (size_t word = 0; word < BITMAP_WORDS; word++) {
+            auto bits = free_bits[word].load(etl::memory_order_relaxed);
+
+            while (bits != 0) {
+                uint32_t bit = bits & (~bits + 1);
+                auto was = free_bits[word].fetch_and(~bit, etl::memory_order_acquire);
+
+                if (was & bit) {
+                    return static_cast<ChunkId>(
+                        word * BITS_PER_WORD + etl::count_trailing_zeros(bit));
+                }
+
+                // Another writer claimed this bit. Retry the other free bits
+                // from the returned snapshot.
+                bits = was & ~bit;
             }
-
-            // If current space is less than needed — cut the tail
-            // + 1 byte reserved, to distinguish empty from full
-            if (required_size + 1 > space_available) {
-                RecordHeader header{};
-                getRecordHeader(tail, header);
-                // Here we can have invalid header, if tail_idx was updated.
-                // But that's safe, because bad value will be ignored by CAS.
-                size_t new_tail{(tail + sizeof(RecordHeader) + header.size) % BufferSize};
-
-                tail_idx.compare_exchange_strong(tail, new_tail,
-                    etl::memory_order_relaxed, etl::memory_order_relaxed);
-
-                // Repeat from the beginning, to keep things simple
-                continue;
-            }
-
-            // At this point we know that we have enough space.
-
-            size_t new_upcoming{(upcoming + required_size) % BufferSize};
-
-            if (!upcoming_idx.compare_exchange_strong(upcoming, new_upcoming,
-                etl::memory_order_relaxed, etl::memory_order_relaxed)) {
-                // Failed to update upcoming_idx, another writer changed it
-                // => retry
-                continue;
-            }
-
-            // Successfully allocated space
-            return upcoming;
         }
+
+        return NoChunk;
     }
 
-    inline void getRecordHeader(size_t index, RecordHeader& header) const {
-        readBuffer(index, reinterpret_cast<uint8_t*>(&header), sizeof(RecordHeader));
-    }
+    Chunk chunks[CHUNKS_COUNT]{};
+    etl::atomic<uint32_t> free_bits[BITMAP_WORDS];   // set bit == free chunk
+    etl::atomic<uint16_t> ring[RING_SIZE];          // generation bit + first chunk
 
-    inline void setRecordHeader(size_t index, const RecordHeader& header) {
-        writeBuffer(index, reinterpret_cast<const uint8_t*>(&header), sizeof(RecordHeader));
-    }
-
-    inline void writeBuffer(size_t index, const uint8_t* data, size_t size) {
-        if (index + size <= BufferSize) {
-            etl::copy_n(data, size, &buffer[index]);
-        } else {
-            size_t first_part{BufferSize - index};
-            etl::copy_n(data, first_part, &buffer[index]);
-            etl::copy_n(data + first_part, size - first_part, &buffer[0]);
-        }
-    }
-
-    inline void readBuffer(size_t index, uint8_t* data, size_t size) const {
-        if (index + size <= BufferSize) {
-            etl::copy_n(&buffer[index], size, data);
-        } else {
-            size_t first_part{BufferSize - index};
-            etl::copy_n(&buffer[index], first_part, data);
-            etl::copy_n(&buffer[0], size - first_part, data + first_part);
-        }
-    }
-
-    etl::array<uint8_t, BufferSize> buffer{};
-    etl::atomic<size_t> head_idx{0};       // Index visible to readers (published data)
-    etl::atomic<size_t> upcoming_idx{0};   // Index for next allocation (pre-allocated data)
-    etl::atomic<size_t> tail_idx{0};       // Index where reading starts from
-    etl::atomic<size_t> writers_count{0};  // Number of active writers
+    etl::atomic<uint32_t> head{0};   // next ring position to reserve
+    etl::atomic<uint32_t> tail{0};   // oldest ring position, taken by CAS
+    etl::atomic<uint32_t> lost{0};   // records that never reached a reader
 };
 
 } // namespace jetlog

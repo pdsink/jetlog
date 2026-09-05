@@ -76,16 +76,13 @@ TEST_F(StringTokenizerTest, IteratorOperations) {
     StringTokenizer tokenizer("a {} b");
     auto it = tokenizer.begin();
 
-    // Test operator*
     EXPECT_EQ((*it).text, "a ");
     EXPECT_FALSE((*it).is_placeholder);
 
-    // Test operator++ (prefix)
     ++it;
     EXPECT_EQ((*it).text, "{}");
     EXPECT_TRUE((*it).is_placeholder);
 
-    // Test operator++ (postfix)
     auto old_it = it++;
     EXPECT_EQ((*old_it).text, "{}");
     EXPECT_EQ((*it).text, " b");
@@ -108,10 +105,8 @@ TEST_F(StringTokenizerTest, RangeBasedFor) {
     EXPECT_EQ(actual, expected);
 }
 
-// Test incorrect placeholder
 TEST_F(StringTokenizerTest, Incomplete_Placeholders) {
     verify_tokens("text { text", {
-        //{"text { text", false}
         // Text split into several tokens, due to a simplified scanner
         {"text ", false},
         {"{", false},
@@ -123,7 +118,6 @@ TEST_F(StringTokenizerTest, Incomplete_Placeholders) {
     });
 }
 
-// Test space characters
 TEST_F(StringTokenizerTest, WhitespaceHandling) {
     verify_tokens("  {}  ", {
         {"  ", false},

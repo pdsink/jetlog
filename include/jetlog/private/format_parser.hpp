@@ -9,8 +9,8 @@
 {:x}  // ff
 {:X}  // FF
 
-// Hex with leading 0X
-{:#x} // 0Xff
+// Hex with base prefix
+{:#x} // 0xff
 {:#X} // 0XFF
 
 // Zero-padded hex
@@ -18,7 +18,7 @@
 
 // Binary format
 {:b}   // 101010
-{:#b}  // 0B101010
+{:#b}  // 0b101010
 
 // Decimal
 {:d}   // 42
@@ -34,26 +34,26 @@ class FormatParser {
 public:
     static auto get_placeholder_length(etl::string_view str, size_t pos) -> size_t {
         const size_t start{pos};
-        const size_t max{str.length()};
+        const auto max = str.length();
 
         if (pos >= max || str[pos] != '{') { return 0; }
         if (pos + 1 >= max) { return 0; }
 
-        // Check empty {}
+        // Empty placeholder {}.
         if (str[pos + 1] == '}') { return 2; }
 
-        // Check :
+        // A format specifier starts with ':'.
         if (str[pos + 1] != ':') { return 0; }
         if (pos + 2 >= max) { return 0; }
         pos += 2;
 
-        // Check #
+        // Optional base prefix.
         if (pos < max && str[pos] == '#') {
             pos++;
             if (pos >= max) { return 0; }
         }
 
-        // Check zero padding (must be first)
+        // A leading zero selects padding and must be followed by a width.
         if (pos < max && str[pos] == '0') {
             pos++;
             if (pos >= max || !is_digit(str[pos])) { return 0; }
@@ -79,8 +79,8 @@ public:
         return pos + 1 - start;
     }
 
-    static void parse_format(etl::string_view str, size_t pos, etl::format_spec& spec) {
-        const size_t max{str.length()};
+    static auto parse_format(etl::string_view str, size_t pos, etl::format_spec& spec) -> void {
+        const auto max = str.length();
         if (pos >= max || str[pos] != '{') {
             reset_spec(spec);
             return;
@@ -90,10 +90,10 @@ public:
             return;
         }
 
-        // Check empty format "{}"
+        // {} keeps the caller's format defaults.
         if (str[pos + 1] == '}') { return; }
 
-        // Check format specifier start
+        // A format specifier starts with ':'.
         if (str[pos + 1] != ':') {
             reset_spec(spec);
             return;
@@ -104,7 +104,7 @@ public:
         }
         pos += 2;
 
-        // Check #
+        // Optional base prefix.
         if (pos < max && str[pos] == '#') {
             spec.show_base(true);
             pos++;
@@ -114,7 +114,7 @@ public:
             }
         }
 
-        // Check zero padding (must be first)
+        // A leading zero selects padding and must be followed by a width.
         if (pos < max && str[pos] == '0') {
             spec.fill('0');
             pos++;
@@ -157,7 +157,7 @@ public:
         }
         pos++;
 
-        // Must end with "}"
+        // The placeholder must end with '}'.
         if (str[pos] != '}') {
             reset_spec(spec);
             return;
@@ -165,7 +165,7 @@ public:
     }
 
 private:
-    static void reset_spec(etl::format_spec& spec) {
+    static auto reset_spec(etl::format_spec& spec) -> void {
         spec.fill(' ');
         spec.width(0);
         spec.base(10);
@@ -173,7 +173,7 @@ private:
         spec.upper_case(false);
     }
 
-    static constexpr bool is_digit(int ch) noexcept {
+    static constexpr auto is_digit(int ch) noexcept -> bool {
         return ch >= '0' && ch <= '9';
     }
 };

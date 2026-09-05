@@ -59,20 +59,20 @@ public:
         size_t current_pos;
         Token current_token{"", false};
 
-        void find_next_token() {
+        auto find_next_token() -> void {
             if (current_pos >= source.length()) {
                 return;
             }
 
             if (source[current_pos] == '{') {
-                size_t len{FormatParser::get_placeholder_length(source, current_pos)};
+                auto len = FormatParser::get_placeholder_length(source, current_pos);
                 if (len > 0) {
                     current_token = Token{source.substr(current_pos, len), true};
                 } else {
                     current_token = Token{source.substr(current_pos, 1), false};
                 }
             } else {
-                size_t next_pos{source.find('{', current_pos)};
+                auto next_pos = source.find('{', current_pos);
                 if (next_pos == etl::string_view::npos) {
                     current_token = Token{source.substr(current_pos), false};
                 } else {

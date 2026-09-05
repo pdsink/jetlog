@@ -2,15 +2,13 @@
 
 #include "jetlog/jetlog.hpp"
 
-//
-// Here we create simple jetlog wrappers to use in project.
-//
+using LogConfig = jetlog::Config<>;
 
-using Logger = jetlog::Writer<>;
+using LogWriter = jetlog::Writer<LogConfig>;
 
-extern Logger logger;
+extern LogWriter logger;
 
-// We do not use tags in this example, so we pass an empty string.
+// No tags in this example, so the tag is an empty string.
 #define LOG_ERROR(...) logger.push("", jetlog::level::error, __VA_ARGS__)
 #define LOG_INFO(...) logger.push("", jetlog::level::info, __VA_ARGS__)
 #define LOG_DEBUG(...) logger.push("", jetlog::level::debug, __VA_ARGS__)

@@ -1,13 +1,19 @@
 #pragma once
 
-#include <etl/limits.h>
-#include <etl/type_traits.h>
-#include <etl/utility.h>
-#include <stdint.h>
-
+#include "private/config.hpp"
+#include "private/arguments.hpp"
+#include "private/wire.hpp"
 #include "private/ring_buffer.hpp"
 #include "private/string_tokenizer.hpp"
-#include "private/typelists.hpp"
+
+#include <etl/limits.h>
+#include <etl/string.h>
+#include <etl/string_view.h>
+#include <etl/to_string.h>
+#include <etl/type_traits.h>
+
+#include <stdint.h>
+#include <string.h>
 
 namespace jetlog {
 
@@ -21,121 +27,152 @@ namespace level {
     };
 } // namespace level
 
-template <typename Char, size_t N>
-constexpr auto decayLiteralArg(Char (&s)[N]) noexcept -> typename
-etl::enable_if<etl::is_same<typename etl::remove_cv<Char>::type, char>::value, const char*>::type
-{
-    // Array-to-pointer decay happens due to the function's return type
-    // being `const char*`. Returning `s` is portable and correct.
-    return s;
-}
 
-template <typename T>
-constexpr T&& decayLiteralArg(T&& x) noexcept
-{
-    return etl::forward<T>(x);
-}
-
-
-
-
-template <
-    size_t MaxRecordSize = 256,
-    typename Encoders = jetlog::ParamEncoders_32_And_Float
->
-class Writer {
+//
+// Timestamp source. Functions and captureless lambdas are stored as function
+// pointers. Other callables must be named objects that outlive the writer;
+// they are stored by reference, and temporaries are rejected.
+//
+class TimeSource {
 public:
-    explicit Writer(jetlog::IRingBuffer& buf) : ringBuffer{buf} {}
+    TimeSource() = default;
 
-    template<typename... Args>
-    auto push(const char* tag, uint8_t level, const char* message, const Args&... msgArgs) -> bool {
-        // The record should be a vector, but we use a string to control overflow
-        etl::string<MaxRecordSize> record{};
-        record.clear();
+    template <typename T, etl::enable_if_t<
+        etl::is_convertible_v<T, uint32_t (*)()>, int> = 0>
+    TimeSource(const T& function)
+        : plain{function} {}
 
-        Encoders::write(getTime(), record);
-        Encoders::write(tag, record);
-        Encoders::write(level, record);
-        Encoders::write(message, record);
+    template <typename T, etl::enable_if_t<
+        etl::is_lvalue_reference_v<T>
+        && !etl::is_convertible_v<T, uint32_t (*)()>
+        && !etl::is_same_v<detail::bare<T>, TimeSource>, int> = 0>
+    TimeSource(T&& source)
+        : context{&source}
+        , thunk{[](const void* at) { return (*static_cast<const detail::bare<T>*>(at))(); }} {}
 
-        int dummy[] = { 0, (Encoders::write(jetlog::decayLiteralArg(msgArgs), record), 0)... };
-        (void)dummy;
+    auto empty() const -> bool { return plain == nullptr && thunk == nullptr; }
 
-        bool size_ok = !record.is_truncated();
-
-        if (!size_ok) {
-            // If the data is too big, write a truncated stub
-            record.clear();
-            Encoders::write(getTime(), record);
-            Encoders::write(tag, record);
-            Encoders::write(level, record);
-            static const char* stub = "[TRUNCATED]";
-            Encoders::write(stub, record);
-        }
-
-        return ringBuffer.writeRecord(reinterpret_cast<const uint8_t*>(record.data()), record.size()) &&
-            size_ok;
-    }
-
-    virtual auto getTime() -> uint32_t {
-        return etl::numeric_limits<uint32_t>::max();
+    auto operator()() const -> uint32_t {
+        if (plain != nullptr) { return plain(); }
+        return thunk(context);
     }
 
 private:
-    jetlog::IRingBuffer& ringBuffer;
+    uint32_t (*plain)(){nullptr};
+    const void* context{nullptr};
+    uint32_t (*thunk)(const void*){nullptr};
 };
 
 
-template <
-    size_t MaxRecordSize = 256,
-    typename Decoders = jetlog::ParamDecoders_32_And_Float
->
-class Reader {
+//
+// Writes records directly into buffer memory. Many writers can share one
+// buffer without waiting.
+//
+template <typename Cfg = Config<>>
+class Writer {
 public:
-    explicit Reader(jetlog::IRingBuffer& buf) : ringBuffer{buf} {}
+    using Codecs = typename Cfg::codecs;
 
-    auto pull(etl::istring& output) -> bool {
-        etl::vector<uint8_t, MaxRecordSize> record;
-        if (!ringBuffer.readRecord(record)) { return false; }
+    Writer(IRingBuffer& buf, TimeSource time = {})
+        : buffer{buf}, time_source{time} {}
 
-        int32_t offset = 0;
-
-        if (!IDecoder::isAvailableAt(record, offset)) { return false; }
-        auto timestamp = IDecoder::getAsNum<uint32_t>(record, offset);
-        offset = IDecoder::getNextOffset(record, offset);
-
-        if (!IDecoder::isAvailableAt(record, offset)) { return false; }
-        auto tag = IDecoder::getAsStringView(record, offset);
-        offset = IDecoder::getNextOffset(record, offset);
-
-        if (!IDecoder::isAvailableAt(record, offset)) { return false; }
-        auto level = IDecoder::getAsNum<uint8_t>(record, offset);
-        offset = IDecoder::getNextOffset(record, offset);
-
-        if (!IDecoder::isAvailableAt(record, offset)) { return false; }
-        auto tokenizer = StringTokenizer(IDecoder::getAsStringView(record, offset));
-        offset = IDecoder::getNextOffset(record, offset);
-
-        writeLogHeader(output, timestamp, tag, level);
-
-        for (const auto& token : tokenizer) {
-            if (token.is_placeholder) {
-                if (Decoders::format(record, offset, output, token.text)) {
-                    offset = IDecoder::getNextOffset(record, offset);
-                } else {
-                    // no params left => write placeholder source
-                    output.append(token.text.begin(), token.text.end());
-                }
-            } else {
-                output.append(token.text.begin(), token.text.end());
-            }
-        }
-
-        return true;
+    // Normalize strings before write() so literal lengths do not multiply
+    // its instantiations.
+    template <typename Tag, typename Fmt, typename... Args>
+    auto push(Tag&& tag, uint8_t lvl, Fmt&& fmt, const Args&... args) -> bool {
+        return write(detail::as_static(static_cast<Tag&&>(tag)), lvl,
+                     detail::as_static(static_cast<Fmt&&>(fmt)),
+                     detail::as_arg(args)...);
     }
 
-    virtual void writeLogHeader(etl::istring& output, uint32_t timestamp, const etl::string_view& tag, uint8_t level) {
-        output.append(level2str(level));
+private:
+    template <typename... Args>
+    auto write(static_str tag, uint8_t lvl, static_str fmt, const Args&... args) -> bool {
+        WireWriter<Codecs> rec{buffer};
+
+        if (!rec.open()) {
+            buffer.report_lost();
+            return false;
+        }
+
+        uint32_t stamp = !time_source.empty()
+            ? time_source()
+            : etl::numeric_limits<uint32_t>::max();
+
+        bool ok = rec.put(stamp)
+               && rec.put(tag)
+               && rec.put(lvl)
+               && rec.put(fmt)
+               && (rec.put(args) && ...);
+
+        if (!ok) {
+            rec.discard();
+            buffer.report_lost();
+            return false;
+        }
+
+        return rec.commit();
+    }
+
+    IRingBuffer& buffer;
+    TimeSource time_source;
+};
+
+
+//
+// Reads one record or loss notification per pull(). Single reader, low priority.
+// Appends to the caller's output string; the reader has no buffer of its own.
+//
+template <typename Cfg = Config<>>
+class Reader {
+public:
+    using Codecs = typename Cfg::codecs;
+
+    explicit Reader(IRingBuffer& buf) : buffer{buf} {}
+
+    Reader(const Reader&) = delete;
+    auto operator=(const Reader&) -> Reader& = delete;
+
+    virtual ~Reader() {
+        if (pending != NoChunk) { buffer.release_chunks(pending); }
+    }
+
+    auto pull(etl::istring& output) -> bool {
+        while (true) {
+            if (pending == NoChunk) {
+                // Take the record before reporting losses, so writers cannot
+                // evict it while the caller prints the loss notification.
+                pending = buffer.ring_pop();
+                auto lost = buffer.lost_count();
+
+                if (lost != lost_seen) {
+                    uint32_t count = lost - lost_seen;
+                    lost_seen = lost;
+                    writeLossReport(output, count);
+
+                    return true;
+                }
+            }
+
+            if (pending == NoChunk) { return false; }
+
+            // A retained record goes next even if more losses have arrived.
+            WireReader<Codecs> rec{buffer};
+            rec.open(pending);
+            pending = NoChunk;
+
+            if (readRecord(rec, output)) { return true; }
+
+            // Report a broken header as a loss on the next iteration. Continue
+            // draining: pull() must return false only when no record is
+            // available, so a malformed header cannot stop the caller's loop.
+            buffer.report_lost();
+        }
+    }
+
+    virtual auto writeLogHeader(etl::istring& output, uint32_t timestamp,
+                                const etl::string_view& tag, uint8_t lvl) -> void {
+        output.append(level2str(lvl));
 
         if (timestamp != etl::numeric_limits<uint32_t>::max()) {
             output.append(" (");
@@ -147,7 +184,14 @@ public:
             output.append(" ");
             output.append(tag.begin(), tag.end());
         }
+
         output.append(": ");
+    }
+
+    virtual auto writeLossReport(etl::istring& output, uint32_t count) -> void {
+        output.append("... records lost: ");
+        etl::to_string(count, output, true);
+        output.append(" ...");
     }
 
     virtual auto level2str(uint8_t lvl) -> const char* {
@@ -162,7 +206,58 @@ public:
     }
 
 private:
-    jetlog::IRingBuffer& ringBuffer;
+    //
+    // Reads one record into `output`. False means the header did not parse:
+    // nothing was appended, and the record is released either way.
+    //
+    auto readRecord(WireReader<Codecs>& rec, etl::istring& output) -> bool {
+        ConstByteSpan raw{};
+
+        // The four header values are always written first, so their encodings
+        // are known here and the bytes can be taken as they are.
+        if (!rec.template read_raw<U32>(raw)) { rec.close(); return false; }
+        auto timestamp = load_le<uint32_t>(raw.data());
+
+        if (!rec.template read_raw<StrRef>(raw)) { rec.close(); return false; }
+        etl::string_view tag(reinterpret_cast<const char*>(raw.data()), raw.size());
+
+        if (!rec.template read_raw<U8>(raw)) { rec.close(); return false; }
+        uint8_t lvl = raw[0];
+
+        if (!rec.template read_raw<StrRef>(raw)) { rec.close(); return false; }
+        etl::string_view fmt(reinterpret_cast<const char*>(raw.data()), raw.size());
+
+        writeLogHeader(output, timestamp, tag, lvl);
+
+        for (const auto& token : StringTokenizer(fmt)) {
+            if (!token.is_placeholder) {
+                output.append(token.text.begin(), token.text.end());
+                continue;
+            }
+
+            switch (rec.read(output, token.text)) {
+                case ReadStatus::Ok: break;
+
+                // Nothing left to print here, show the placeholder as written.
+                case ReadStatus::EndOfRecord:
+                    output.append(token.text.begin(), token.text.end());
+                    break;
+
+                // Writer and reader share the config, so this means a broken
+                // record.
+                case ReadStatus::Broken:
+                    output.append("[UNKNOWN]");
+                    break;
+            }
+        }
+
+        rec.close();
+        return true;
+    }
+
+    IRingBuffer& buffer;
+    uint32_t lost_seen{0};
+    ChunkId pending{NoChunk};
 };
 
 } // namespace jetlog
