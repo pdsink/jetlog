@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.0.0 - Unreleased
+## 2.0.0 - 2026-09-08
 
 Full rewrite. Log points stay as they are - `push()` calls do not change -
 everything around them does.

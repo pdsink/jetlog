@@ -1,6 +1,6 @@
 {
     "name": "jetlog",
-    "version": "1.0.1",
+    "version": "2.0.0",
     "description": "Fast, lock-less and type-safe logging for small embedded systems.",
     "keywords": [ "logging", "thread-safe", "type-safe" ],
     "homepage": "https://github.com/pdsink/jetlog",
