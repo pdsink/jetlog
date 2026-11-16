@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 #include <array>
+#include <type_traits>
 
 #include <etl/array.h>
 #include <etl/vector.h>
@@ -348,6 +349,41 @@ const char long_static[] =
     "abcdefghij";
 
 } // namespace
+
+TEST(JetlogStrings, StaticStrConstructors) {
+    static_assert(std::is_trivially_copyable_v<jetlog::static_str>);
+
+    // Literal and const array take the compile time length.
+    constexpr jetlog::static_str literal{"abc"};
+    static_assert(literal.size() == 3);
+
+    static const char const_array[] = "const";
+    constexpr jetlog::static_str from_const_array{const_array};
+    static_assert(from_const_array.size() == 5);
+
+    // Mutable buffer counts up to the terminator, not the array size.
+    char buffer[16] = "buf";
+    jetlog::static_str from_buffer{buffer};
+    ASSERT_EQ(from_buffer.size(), 3U);
+    ASSERT_EQ(from_buffer.data(), &buffer[0]);
+
+    const char* const_ptr = "pointer";
+    ASSERT_EQ(jetlog::static_str{const_ptr}.size(), 7U);
+
+    char* ptr = buffer;
+    ASSERT_EQ(jetlog::static_str{ptr}.size(), 3U);
+
+    const char* null_ptr = nullptr;
+    ASSERT_TRUE(jetlog::static_str{null_ptr}.empty());
+
+    constexpr jetlog::static_str sized{"abcdef", 2};
+    static_assert(sized.size() == 2);
+
+    ASSERT_TRUE(jetlog::static_str{}.empty());
+
+    etl::string_view view = literal;
+    ASSERT_EQ(view.size(), 3U);
+}
 
 TEST(JetlogStrings, StaticStringArgumentsTravelAsPointers) {
     jetlog::RingBuffer<4096> buffer{};

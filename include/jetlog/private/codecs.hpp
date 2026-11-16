@@ -22,20 +22,44 @@ using ConstByteSpan = etl::span<const uint8_t>;
 
 //
 // A promise that a string outlives its records.
+// Can't use etl::string_view: it's not trivially copyable, which adds
+// significant overhead to every `log.push()` call.
 //
-class static_str : public etl::string_view {
+class static_str {
 public:
     constexpr static_str() = default;
 
+    // Literal or const array: length is known at compile time.
     template <size_t N>
     constexpr explicit static_str(const char (&text)[N])
-        : etl::string_view(text, N - 1) {}
+        : ptr{text}, len{N - 1} {}
 
-    explicit static_str(const char* text)
-        : etl::string_view(text, text != nullptr ? strlen(text) : 0) {}
+    // Mutable buffer: text may be shorter than the array.
+    template <size_t N>
+    explicit static_str(char (&text)[N])
+        : ptr{text}, len{strlen(text)} {}
+
+    // Pointer. A template, so that a literal does not pick it over the array
+    // overload.
+    template <typename T, etl::enable_if_t<
+        etl::is_same_v<T, const char*> || etl::is_same_v<T, char*>, int> = 0>
+    explicit static_str(T text)
+        : ptr{text}, len{text != nullptr ? strlen(text) : 0} {}
 
     constexpr static_str(const char* text, size_t size)
-        : etl::string_view(text, size) {}
+        : ptr{text}, len{size} {}
+
+    constexpr auto data() const -> const char* { return ptr; }
+    constexpr auto size() const -> size_t { return len; }
+    constexpr auto empty() const -> bool { return len == 0; }
+    constexpr auto begin() const -> const char* { return ptr; }
+    constexpr auto end() const -> const char* { return ptr + len; }
+
+    constexpr operator etl::string_view() const { return etl::string_view(ptr, len); }
+
+private:
+    const char* ptr{nullptr};
+    size_t len{0};
 };
 
 
