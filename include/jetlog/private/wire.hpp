@@ -56,12 +56,39 @@ public:
     //
     template <typename T>
     auto put(const T& value) -> bool {
+        const void* at = const_cast<const void*>(
+            static_cast<const volatile void*>(etl::addressof(value)));
+        return put_encoded(at, [](ByteSpan out, const void* src, size_t offset) {
+            return Codecs::encode(out, *static_cast<const T*>(src), offset);
+        });
+    }
+
+    auto commit() -> bool {
+        if (first == NoChunk) { return false; }
+
+        buffer.ring_push(first);
+        first = NoChunk;
+
+        return true;
+    }
+
+    auto discard() -> void {
+        if (first == NoChunk) { return; }
+
+        buffer.release_chunks(first);
+        first = NoChunk;
+    }
+
+private:
+    using EncodeFn = EncoderState (*)(ByteSpan, const void*, size_t);
+
+    auto put_encoded(const void* value, EncodeFn encode) -> bool {
         if (first == NoChunk) { return false; }
 
         EncoderState state{};
 
         while (!state.done) {
-            state = Codecs::encode(ByteSpan(buffer.chunk_data(current) + pos, available()),
+            state = encode(ByteSpan(buffer.chunk_data(current) + pos, available()),
                 value, state.input_offset);
 
             if (state.produced_bytes == 0) {
@@ -82,23 +109,6 @@ public:
         return true;
     }
 
-    auto commit() -> bool {
-        if (first == NoChunk) { return false; }
-
-        buffer.ring_push(first);
-        first = NoChunk;
-
-        return true;
-    }
-
-    auto discard() -> void {
-        if (first == NoChunk) { return; }
-
-        buffer.release_chunks(first);
-        first = NoChunk;
-    }
-
-private:
     auto available() const -> size_t { return buffer.chunk_data_size() - pos; }
 
     auto grow() -> bool {
