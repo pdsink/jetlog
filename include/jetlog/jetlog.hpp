@@ -100,15 +100,15 @@ public:
     // multiply its instantiations.
     template <typename Fmt, typename... Args>
     auto push(const PushOptions& opts, Fmt&& fmt, const Args&... args) -> bool {
-        return write(opts, detail::as_static(static_cast<Fmt&&>(fmt)),
-                     detail::as_arg(args)...);
+        const auto format = detail::as_static(static_cast<Fmt&&>(fmt));
+        return write(opts, format.data(), format.size(), detail::as_arg(args)...);
     }
 
     template <typename Tag, typename Fmt, typename... Args>
     auto push(Tag&& tag, uint8_t lvl, Fmt&& fmt, const Args&... args) -> bool {
+        const auto format = detail::as_static(static_cast<Fmt&&>(fmt));
         return write(PushOptions{detail::as_static(static_cast<Tag&&>(tag)), lvl},
-                     detail::as_static(static_cast<Fmt&&>(fmt)),
-                     detail::as_arg(args)...);
+                     format.data(), format.size(), detail::as_arg(args)...);
     }
 
 private:
@@ -119,21 +119,24 @@ private:
         return rec.put(*static_cast<const T*>(value));
     }
 
-    // Only collects the arguments. The record is built by vwrite(),
-    // a single copy shared by all calls.
+    // 1. Only collects the arguments. The record is built by vwrite(),
+    //    a single copy shared by all calls.
+    // 2. Pass the format pointer and length separately so they can go in
+    //    registers without being stored on the stack.
     template <typename... Args>
-    auto write(const PushOptions& opts, static_str fmt, const Args&... args) -> bool {
+    auto write(const PushOptions& opts, const char* fmt_data, size_t fmt_size,
+               const Args&... args) -> bool {
         if constexpr (sizeof...(Args) == 0) {
-            return vwrite(opts, fmt, nullptr, nullptr, 0);
+            return vwrite(opts, fmt_data, fmt_size, nullptr, nullptr, 0);
         } else {
             const void* values[] = { static_cast<const void*>(&args)... };
             static constexpr PutArgFn puts[] = { &put_arg<Args>... };
-            return vwrite(opts, fmt, values, puts, sizeof...(Args));
+            return vwrite(opts, fmt_data, fmt_size, values, puts, sizeof...(Args));
         }
     }
 
     JETLOG_NOINLINE
-    auto vwrite(const PushOptions& opts, static_str fmt,
+    auto vwrite(const PushOptions& opts, const char* fmt_data, size_t fmt_size,
                 const void* const* values, const PutArgFn* puts, size_t count) -> bool {
         WireWriter<Codecs> rec{buffer};
 
@@ -149,7 +152,7 @@ private:
         bool ok = rec.put(stamp)
                && rec.put(opts.tag)
                && rec.put(opts.level)
-               && rec.put(fmt);
+               && rec.put(static_str{fmt_data, fmt_size});
 
         for (size_t i = 0; ok && i < count; i++) {
             ok = puts[i](rec, values[i]);
