@@ -67,8 +67,13 @@ static void tags_and_levels() {
     jetlog::Writer<> writer{buffer};
     jetlog::Reader<> reader{buffer};
 
-    writer.push("net", LVL_ERROR, "link down");
-    writer.push("net", LVL_WARN, "retrying");
+    // Reuse constexpr options for fixed tag/level pairs to reduce memory use.
+    static constexpr jetlog::PushOptions net_error{jetlog::static_str{"net"}, LVL_ERROR};
+    static constexpr jetlog::PushOptions net_warn{jetlog::static_str{"net"}, LVL_WARN};
+
+    writer.push(net_error, "link down");
+    writer.push(net_warn, "retrying");
+    // Tag and level can also be passed separately.
     writer.push("", LVL_DEBUG, "no tag on this one");
 
     drain(reader);

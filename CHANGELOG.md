@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.1.0 - Unreleased
+
+### Added
+
+- `push(options, format, ...)` with reusable `PushOptions` for tag and level.
+
+### Changed
+
+- Optimizations to reduce generated code size.
+- Rewrote `static_str` to be trivially copyable.
+
+
 ## 2.0.0 - 2026-09-08
 
 Full rewrite. Log points stay as they are - `push()` calls do not change -
