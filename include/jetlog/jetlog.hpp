@@ -15,6 +15,16 @@
 #include <stdint.h>
 #include <string.h>
 
+// Keeps a function out of line and stops GCC from cloning it per translation
+// unit.
+#if defined(__GNUC__) && !defined(__clang__)
+#define JETLOG_NOINLINE __attribute__((noipa))
+#elif defined(__GNUC__)
+#define JETLOG_NOINLINE __attribute__((noinline))
+#else
+#define JETLOG_NOINLINE
+#endif
+
 namespace jetlog {
 
 namespace level {
@@ -65,6 +75,16 @@ private:
 
 
 //
+// Tag and level of a record. Declare one constexpr object per tag and level
+// and pass it by reference: a call then carries a single address.
+//
+struct PushOptions {
+    static_str tag;
+    uint8_t level;
+};
+
+
+//
 // Writes records directly into buffer memory. Many writers can share one
 // buffer without waiting.
 //
@@ -76,18 +96,45 @@ public:
     Writer(IRingBuffer& buf, TimeSource time = {})
         : buffer{buf}, time_source{time} {}
 
-    // Normalize strings before write() so literal lengths do not multiply
-    // its instantiations.
+    // Both overloads normalize strings before write(), so literal lengths do not
+    // multiply its instantiations.
+    template <typename Fmt, typename... Args>
+    auto push(const PushOptions& opts, Fmt&& fmt, const Args&... args) -> bool {
+        return write(opts, detail::as_static(static_cast<Fmt&&>(fmt)),
+                     detail::as_arg(args)...);
+    }
+
     template <typename Tag, typename Fmt, typename... Args>
     auto push(Tag&& tag, uint8_t lvl, Fmt&& fmt, const Args&... args) -> bool {
-        return write(detail::as_static(static_cast<Tag&&>(tag)), lvl,
+        return write(PushOptions{detail::as_static(static_cast<Tag&&>(tag)), lvl},
                      detail::as_static(static_cast<Fmt&&>(fmt)),
                      detail::as_arg(args)...);
     }
 
 private:
+    using PutArgFn = bool (*)(WireWriter<Codecs>&, const void*);
+
+    template <typename T>
+    static auto put_arg(WireWriter<Codecs>& rec, const void* value) -> bool {
+        return rec.put(*static_cast<const T*>(value));
+    }
+
+    // Only collects the arguments. The record is built by vwrite(),
+    // a single copy shared by all calls.
     template <typename... Args>
-    auto write(static_str tag, uint8_t lvl, static_str fmt, const Args&... args) -> bool {
+    auto write(const PushOptions& opts, static_str fmt, const Args&... args) -> bool {
+        if constexpr (sizeof...(Args) == 0) {
+            return vwrite(opts, fmt, nullptr, nullptr, 0);
+        } else {
+            const void* values[] = { static_cast<const void*>(&args)... };
+            static constexpr PutArgFn puts[] = { &put_arg<Args>... };
+            return vwrite(opts, fmt, values, puts, sizeof...(Args));
+        }
+    }
+
+    JETLOG_NOINLINE
+    auto vwrite(const PushOptions& opts, static_str fmt,
+                const void* const* values, const PutArgFn* puts, size_t count) -> bool {
         WireWriter<Codecs> rec{buffer};
 
         if (!rec.open()) {
@@ -100,10 +147,13 @@ private:
             : etl::numeric_limits<uint32_t>::max();
 
         bool ok = rec.put(stamp)
-               && rec.put(tag)
-               && rec.put(lvl)
-               && rec.put(fmt)
-               && (rec.put(args) && ...);
+               && rec.put(opts.tag)
+               && rec.put(opts.level)
+               && rec.put(fmt);
+
+        for (size_t i = 0; ok && i < count; i++) {
+            ok = puts[i](rec, values[i]);
+        }
 
         if (!ok) {
             rec.discard();

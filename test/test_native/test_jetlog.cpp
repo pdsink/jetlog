@@ -63,6 +63,30 @@ TEST(Jetlog, TagAndFormatCanBeStaticStrings) {
     ASSERT_EQ(out, etl::string<128>("I (100) app: n=5"));
 }
 
+TEST(Jetlog, PushWithOptions) {
+    jetlog::RingBuffer<4096> buffer{};
+    jetlog::Writer<Config> writer{buffer, fake_time};
+    jetlog::Reader<Config> reader{buffer};
+
+    static constexpr jetlog::PushOptions app_info{jetlog::static_str{"app"}, jetlog::level::info};
+
+    ASSERT_TRUE(writer.push(app_info, "n={}", 5));
+    ASSERT_TRUE(writer.push(app_info, "no args"));
+    ASSERT_TRUE(writer.push(jetlog::PushOptions{jetlog::static_str{"tmp"}, jetlog::level::error}, "x={}", 7));
+
+    etl::string<128> out;
+    ASSERT_TRUE(reader.pull(out));
+    ASSERT_EQ(out, etl::string<128>("I (100) app: n=5"));
+
+    out.clear();
+    ASSERT_TRUE(reader.pull(out));
+    ASSERT_EQ(out, etl::string<128>("I (100) app: no args"));
+
+    out.clear();
+    ASSERT_TRUE(reader.pull(out));
+    ASSERT_EQ(out, etl::string<128>("E (100) tmp: x=7"));
+}
+
 TEST(Jetlog, EmptyBufferReadsNothing) {
     jetlog::RingBuffer<4096> buffer{};
     jetlog::Reader<Config> reader{buffer};
